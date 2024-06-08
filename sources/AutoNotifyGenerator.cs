@@ -159,18 +159,21 @@ namespace UniVue.SourceGenerator
 
         private void GenerateNotifyAllMethod(List<IFieldSymbol> fields, ISymbol attributeSymbol, StringBuilder source)
         {
-            if (fields.Count == 0) { return; }
-
             source.Append("\t\tvoid UniVue.Model.IUINotifier.NotifyAll()\n");
             source.Append("\t\t{\n");
-            source.AppendLine($"\t\t\t{BINDER_INTERFACE} model = this;");
-            foreach (var field in fields)
+           
+            if(fields.Count > 0)
             {
-                var property = GetPropertyPrefix(field, attributeSymbol);
-                if (property.Item2 == null) { continue; }
-                string enumCastStr = field.Type.BaseType.SpecialType == SpecialType.System_Enum ? "(int)" : string.Empty;
-                source.AppendLine($"\t\t\tmodel.NotifyUIUpdate(nameof({property.Item2}), {enumCastStr}{property.Item2});");
+                source.AppendLine($"\t\t\t{BINDER_INTERFACE} model = this;");
+                foreach (var field in fields)
+                {
+                    var property = GetPropertyPrefix(field, attributeSymbol);
+                    if (property.Item2 == null) { continue; }
+                    string enumCastStr = field.Type.BaseType.SpecialType == SpecialType.System_Enum ? "(int)" : string.Empty;
+                    source.AppendLine($"\t\t\tmodel.NotifyUIUpdate(nameof({property.Item2}), {enumCastStr}{property.Item2});");
+                }
             }
+            
             source.Append("\t\t}\n");
         }
 
@@ -195,7 +198,6 @@ namespace UniVue.SourceGenerator
 
         private void GenerateUpdateModelMethod(string typeStr, List<IFieldSymbol> fields, ISymbol attributeSymbol, StringBuilder source)
         {
-            if (fields.Count == 0) { return; }
 
             source.AppendLine($"\t\tvoid UniVue.Model.IModelUpdater.UpdateModel(string propertyName, {typeStr} propertyValue)");
             source.AppendLine("\t\t{");
@@ -211,9 +213,9 @@ namespace UniVue.SourceGenerator
                     if (p.Item2 == null) { continue; }
                     source.AppendLine($"\t\t\t\tcase nameof({p.Item2}):");
                     if (f.Type.BaseType.SpecialType == SpecialType.System_Enum)
-                        source.AppendLine($"\t\t\t\t\tthis.{f.Name} = ({p.Item1})propertyValue;");
+                        source.AppendLine($"\t\t\t\t\tthis.{p.Item2} = ({p.Item1})propertyValue;");
                     else
-                        source.AppendLine($"\t\t\t\t\tthis.{f.Name} = propertyValue;");
+                        source.AppendLine($"\t\t\t\t\tthis.{p.Item2} = propertyValue;");
                     source.AppendLine("\t\t\t\t\t\tbreak;");
                 }
                 source.AppendLine("\t\t\t}");
@@ -231,9 +233,9 @@ namespace UniVue.SourceGenerator
                         source.AppendLine($"\t\t\telse if(nameof({p.Item2}).Equals(propertyName))");
 
                     if (fields[i].Type.BaseType.SpecialType == SpecialType.System_Enum)
-                        source.AppendLine($"\t\t\t\tthis.{fields[i].Name} = ({p.Item1})propertyValue;");
+                        source.AppendLine($"\t\t\t\tthis.{p.Item2} = ({p.Item1})propertyValue;");
                     else
-                        source.AppendLine($"\t\t\t\tthis.{fields[i].Name} = propertyValue;");
+                        source.AppendLine($"\t\t\t\tthis.{p.Item2} = propertyValue;");
                 }
             }
 
