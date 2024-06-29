@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace UniVue.SourceGenerator
 {
@@ -31,14 +32,22 @@ namespace UniVue.SourceGenerator
 
             // 将字段按类分组，并生成源
             foreach (IGrouping<INamedTypeSymbol, IFieldSymbol> group in
-                receiver.Fields.GroupBy<IFieldSymbol, INamedTypeSymbol>(
-                    f => f.ContainingType, SymbolEqualityComparer.Default))
+                receiver.Fields.GroupBy<IFieldSymbol, INamedTypeSymbol>(f => f.ContainingType, SymbolEqualityComparer.Default))
             {
                 string classSource = ProcessClass(group.Key, group.ToList(), attributeSymbol, interfaceSymbol, context);
                 if (classSource != null)
+                {
                     context.AddSource($"{group.Key.Name}.g.cs", SourceText.From(classSource, Encoding.UTF8));
+                }
             }
         }
+
+        private bool IsNamespace(string namespaceName)
+        {
+            string pattern = @"^([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*$";
+            return !string.IsNullOrEmpty(namespaceName) && Regex.IsMatch(namespaceName, pattern);
+        }
+
 
         private string ProcessClass(INamedTypeSymbol classSymbol, List<IFieldSymbol> fields, ISymbol attributeSymbol, INamedTypeSymbol notifySymbol, GeneratorExecutionContext context)
         {
@@ -60,14 +69,14 @@ namespace UniVue.SourceGenerator
                 return null;
             }
 
-            //必须声明为public和partial
-            if (classSymbol.DeclaredAccessibility != Accessibility.Public)
+            ////必须声明为public和partial
+            if (classSymbol.DeclaredAccessibility != Accessibility.Public && classSymbol.DeclaredAccessibility != Accessibility.Internal)
             {
                 // 创建一个简单的诊断
                 var diagnostic = Diagnostic.Create(
                     "AutoNotifyGenerator002",
                     "SourceGenerator.AutoNotifyGenerator",
-                    $"{classSymbol.ToDisplayString()}: 使用[AutoNotify]特性的类必须是具有公开public的访问修饰符以及是一个部分的partial",
+                    $"{classSymbol.ToDisplayString()}: 使用[AutoNotify]特性的类必须是具有public或internal的访问修饰符以及是一个部分的partial类",
                     DiagnosticSeverity.Warning,
                     DiagnosticSeverity.Warning,
                     isEnabledByDefault: true,
@@ -79,14 +88,22 @@ namespace UniVue.SourceGenerator
             }
 
             string namespaceName = classSymbol.ContainingNamespace.ToDisplayString();
+            bool isNamespace = IsNamespace(namespaceName);
 
             //开始构建生成的源代码
             StringBuilder source = new StringBuilder();
 
-            source.Append("namespace ");
-            source.Append(namespaceName);
-            source.Append("\n{\n");
-            source.Append("\tpublic partial "); //部分类必须声明为public
+            if (isNamespace)
+            {
+                source.Append("namespace ");
+                source.Append(namespaceName);
+                source.Append("\n{\n");
+            }
+
+            string accessStr = classSymbol.DeclaredAccessibility.ToString().ToLower();
+            source.Append('\t');
+            source.Append(accessStr);
+            source.Append(" partial "); 
             source.Append(classSymbol.IsValueType ? "struct " : "class ");
             source.Append(classSymbol.Name);
 
@@ -108,8 +125,15 @@ namespace UniVue.SourceGenerator
             GenerateNotifyAllMethod(fields, attributeSymbol, source);
             GenerateUpdateModelMethod(fields, attributeSymbol, source);
 
+            //实现IConsumableModel接口中的方法
+            GenerateConsumeableModelMethod(fields, attributeSymbol, source);
+            GenerateConsumeableModelAllMethod(fields, attributeSymbol, source);
+
             source.Append("\n\t}\n");
-            source.Append("}");
+
+            if(isNamespace)
+                source.Append("}");
+
             return source.ToString();
         }
 
@@ -138,25 +162,7 @@ namespace UniVue.SourceGenerator
 ");
         }
 
-        private ValueTuple<ITypeSymbol, string> GetPropertyPrefix(IFieldSymbol fieldSymbol, ISymbol attributeSymbol)
-        {
-            // 获取字段的名称和类型
-            string fieldName = fieldSymbol.Name;
-            ITypeSymbol fieldType = fieldSymbol.Type;
-
-            // 从字段中获取automotify属性和任何相关数据
-            AttributeData attributeData = fieldSymbol.GetAttributes().Single(ad => ad.AttributeClass.Equals(attributeSymbol, SymbolEqualityComparer.Default));
-            TypedConstant overridenNameOpt = attributeData.NamedArguments.SingleOrDefault(kvp => kvp.Key == "PropertyName").Value;
-
-            string propertyName = FieldName2PropertyName(fieldName, overridenNameOpt);
-            if (propertyName.Length == 0 || propertyName == fieldName)
-            {
-                //TODO:发出一个我们无法处理这个字段的诊断
-                return default;
-            }
-            return (fieldType, propertyName);
-        }
-
+     
         private void GenerateNotifyAllMethod(List<IFieldSymbol> fields, ISymbol attributeSymbol, StringBuilder source)
         {
             source.Append("\t\tvoid UniVue.Model.IUINotifier.NotifyAll()\n");
@@ -198,7 +204,6 @@ namespace UniVue.SourceGenerator
 
         private void GenerateUpdateModelMethod(string typeStr, List<IFieldSymbol> fields, ISymbol attributeSymbol, StringBuilder source)
         {
-
             source.AppendLine($"\t\tvoid UniVue.Model.IModelUpdater.UpdateModel(string propertyName, {typeStr} propertyValue)");
             source.AppendLine("\t\t{");
 
@@ -239,7 +244,71 @@ namespace UniVue.SourceGenerator
                 }
             }
 
-            source.AppendLine("\t\t}");
+            source.AppendLine("\t\t}\n");
+        }
+
+        private void GenerateConsumeableModelAllMethod(List<IFieldSymbol> fields, ISymbol attributeSymbol, StringBuilder source)
+        {
+            source.Append("\t\tvoid UniVue.Model.IConsumableModel.UpdateAll(UniVue.ViewModel.UIBundle bundle)\n");
+            source.Append("\t\t{\n");
+
+            if (fields.Count > 0)
+            {
+                foreach (var field in fields)
+                {
+                    var property = GetPropertyPrefix(field, attributeSymbol);
+                    if (property.Item2 == null) { continue; }
+                    string enumCastStr = field.Type.BaseType.SpecialType == SpecialType.System_Enum ? "(int)" : string.Empty;
+                    source.AppendLine($"\t\t\tbundle.UpdateUI(nameof({property.Item2}), {enumCastStr}{property.Item2});");
+                }
+            }
+
+            source.Append("\t\t}\n");
+        }
+
+        private void GenerateConsumeableModelMethod(List<IFieldSymbol> fields, ISymbol attributeSymbol, StringBuilder source)
+        {
+            source.Append("\t\tvoid UniVue.Model.IConsumableModel.UpdateUI(string propertyName, UniVue.ViewModel.UIBundle bundle)\n");
+            source.Append("\t\t{\n");
+
+            //多于2个采用switch语句
+            if (fields.Count >= 3)
+            {
+                source.AppendLine("\t\t\tswitch(propertyName)");
+                source.AppendLine("\t\t\t{");
+                foreach (var field in fields)
+                {//bundle.UpdateUI(propertyName, 12);
+                    var p = GetPropertyPrefix(field, attributeSymbol);
+                    if (p.Item2 == null) { continue; }
+                    source.AppendLine($"\t\t\t\tcase nameof({p.Item2}):");
+                    if (field.Type.BaseType.SpecialType == SpecialType.System_Enum)
+                        source.AppendLine($"\t\t\t\t\tbundle.UpdateUI(nameof({p.Item2}), (int){p.Item2});");
+                    else
+                        source.AppendLine($"\t\t\t\t\tbundle.UpdateUI(nameof({p.Item2}), {p.Item2});");
+                    source.AppendLine("\t\t\t\t\t\tbreak;");
+                }
+                source.AppendLine("\t\t\t}");
+            }
+            //采用if语句
+            else
+            {
+                for (int i = 0; i < fields.Count; i++)
+                {
+                    var p = GetPropertyPrefix(fields[i], attributeSymbol);
+                    if (p.Item2 == null) continue;
+                    if (i == 0)
+                        source.AppendLine($"\t\t\tif(nameof({p.Item2}).Equals(propertyName))");
+                    else
+                        source.AppendLine($"\t\t\telse if(nameof({p.Item2}).Equals(propertyName))");
+
+                    if (fields[i].Type.BaseType.SpecialType == SpecialType.System_Enum)
+                        source.AppendLine($"\t\t\t\t\tbundle.UpdateUI(nameof({p.Item2}), (int){p.Item2});");
+                    else
+                        source.AppendLine($"\t\t\t\t\tbundle.UpdateUI(nameof({p.Item2}), {p.Item2});");
+                }
+            }
+
+            source.Append("\t\t}\n");
         }
 
         private string FieldName2PropertyName(string fieldName, TypedConstant overridenNameOpt)
@@ -262,6 +331,27 @@ namespace UniVue.SourceGenerator
 
             return fieldName.Substring(0, 1).ToUpper() + fieldName.Substring(1);
         }
+
+        private ValueTuple<ITypeSymbol, string> GetPropertyPrefix(IFieldSymbol fieldSymbol, ISymbol attributeSymbol)
+        {
+            // 获取字段的名称和类型
+            string fieldName = fieldSymbol.Name;
+            ITypeSymbol fieldType = fieldSymbol.Type;
+
+            // 从字段中获取automotify属性和任何相关数据
+            AttributeData attributeData = fieldSymbol.GetAttributes().Single(ad => ad.AttributeClass.Equals(attributeSymbol, SymbolEqualityComparer.Default));
+            TypedConstant overridenNameOpt = attributeData.NamedArguments.SingleOrDefault(kvp => kvp.Key == "PropertyName").Value;
+
+            string propertyName = FieldName2PropertyName(fieldName, overridenNameOpt);
+            if (propertyName.Length == 0 || propertyName == fieldName)
+            {
+                return default;
+            }
+            return (fieldType, propertyName);
+        }
+
+
+        #region 字段过滤
 
         /// <summary>
         /// Created on demand before each generation pass
@@ -332,6 +422,9 @@ namespace UniVue.SourceGenerator
                 if (named.BaseType.SpecialType == SpecialType.System_Enum) { return true; }
                 return false;
             }
+
         }
+
+        #endregion
     }
 }
