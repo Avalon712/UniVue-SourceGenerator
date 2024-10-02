@@ -22,22 +22,33 @@
 6. 点击Apply，等待编译完成。
 7. 重启Visual Studio编辑器。
 
-### 3.使用AutoNotifyAttribute特性
+### 3.使用特性
 
-之后在任何你想要进行绑定的模型的字段上添加**[AutoNotify]**特性。但是此特性不是随意的，它具有以下限制：
+在使用UniVue的特性时，需要注意以下两点：
 
-1. 只能注解在字段上；
-2. 只能注解在顶级类或结构体（即这个类或结构体的外部不能包含其它类或结构体）；
-3. 类或结构体的修饰符必须有**partial**关键字修饰，这是因为源生成器的实现原理如此；
+1. 只能在一个非嵌套的类上使用；
+2. 依赖类生成的特性，那么类必须有partial关键字修饰；
 
-注意：为了防止源生成器为标记了AutoNotifyAttribute的字段生成的属性重名，你应该了解源生器将字段名转为属性名的逻辑：
+内置的特性的用法：
 
-```
-_name  =>  Name
-m_name =>  Name
-_headIcon => HeadIcon
-m_headIcon => HeadIcon
-即：将以下划线'_'和字符串"m_"的进行删掉，首字母转为大写即可。
-```
+#### 3.1 事件
 
-**此外注解了[AutoNotify]的特性的类或结构体将会自动实现IBindableModel接口（如果你没有主动实现的话），因此你无需显示实现这个接口。**
+**EventRegisterAttribute**：任何类上添加此特性将会自动实现IEventRegister接口，实现此接口的类才允许注册事件回调；
+
+**EventCallAttribute**：注解此特性的方法将会映射一个EventCall对象，同时此特性的类上必须有**EventRegisterAttribute**特性，否则将不起作用；
+
+#### 3.2 模型
+
+**AlsoNotifyAttribute**：注解在字段上，当前属性更改时也通知指定的其它属性；
+
+**BindableAttribute**：注解此特性的类将自动实现IBindableModel接口，将会为这个类中所有字段自动生成属性方法；
+
+**CodeInjectAttribute**：在属性方法的指定位置注入指定代码；
+
+**DontNotifyAttribute**：指定不要为注解此特性的字段生成通知属性；
+
+**PropertyNameAttribute**：为字段定义属性名称；
+
+#### 3.3 枚举
+
+**EnumAliasAttribute**：为一个枚举值定义其它别名（不需要partial关键字）；
